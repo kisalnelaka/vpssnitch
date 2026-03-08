@@ -235,10 +235,10 @@ get_swap_stats() {
     END {
         u=t-f
         if (t == 0) {
-            printf "0 0.0 0.0"
+            printf "0 0 0"
         } else {
             p=(u*100)/t
-            printf "%d %.1f %.1f", p, u/1024, t/1024
+            printf "%d %.0f %.0f", p, u/1024, t/1024
         }
     }' /proc/meminfo
 }

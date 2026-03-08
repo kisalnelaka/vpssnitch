@@ -1,0 +1,471 @@
+#!/usr/bin/env bash
+
+set -u
+
+APP_NAME="vpssnitch"
+VERSION="2.0.0-chaos-gremlin"
+
+INTERVAL=2
+HISTORY_SIZE=30
+RAM_ALERT_THRESHOLD=80
+CPU_ALERT_THRESHOLD=90
+NET_SPIKE_MULTIPLIER=3
+LOG_FILE="${HOME}/.local/share/vpssnitch/vpssnitch.log"
+STATE_DIR="${HOME}/.local/share/vpssnitch"
+MODE="interactive"
+NO_CLEAR=0
+QUIET=0
+
+mkdir -p "$STATE_DIR"
+
+IFACE="${1:-}"
+if [[ -z "${IFACE}" || "${IFACE}" == --* ]]; then
+    IFACE="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5; exit}')"
+fi
+[[ -z "$IFACE" ]] && IFACE="eth0"
+
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+BLUE="\033[34m"
+MAGENTA="\033[35m"
+CYAN="\033[36m"
+BOLD="\033[1m"
+DIM="\033[2m"
+RESET="\033[0m"
+
+CPU_HISTORY=()
+RAM_HISTORY=()
+NET_HISTORY=()
+
+print_help() {
+    cat <<EOF
+${APP_NAME} ${VERSION}
+
+Usage:
+  ${APP_NAME} [interface] [options]
+
+Options:
+  --daemon              Run without clearing screen, suitable for systemd
+  --no-clear            Do not clear the terminal
+  --interval N          Refresh interval in seconds (default: ${INTERVAL})
+  --log-file PATH       Log file path
+  --quiet               Reduce jokes and alert spam
+  --help                Show this help
+
+Examples:
+  ${APP_NAME}
+  ${APP_NAME} eth0
+  ${APP_NAME} --daemon --interval 5
+  ${APP_NAME} ens3 --log-file /var/log/vpssnitch.log
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --daemon)
+            MODE="daemon"
+            NO_CLEAR=1
+            shift
+            ;;
+        --no-clear)
+            NO_CLEAR=1
+            shift
+            ;;
+        --interval)
+            INTERVAL="${2:-2}"
+            shift 2
+            ;;
+        --log-file)
+            LOG_FILE="${2:-$LOG_FILE}"
+            shift 2
+            ;;
+        --quiet)
+            QUIET=1
+            shift
+            ;;
+        --help)
+            print_help
+            exit 0
+            ;;
+        --*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            IFACE="$1"
+            shift
+            ;;
+    esac
+done
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+rand_line() {
+    local arr=(
+        "tiny box, big attitude"
+        "snitching professionally since boot"
+        "watching your VPS like a suspicious pigeon"
+        "resource goblins detected"
+        "keeping an eye on your potato server"
+        "this machine is held together by optimism"
+        "the gremlins are unionizing"
+        "all metrics are innocent until graphed"
+        "server vibes: unstable but brave"
+    )
+    echo "${arr[$((RANDOM % ${#arr[@]}))]}"
+}
+
+log_msg() {
+    local level="$1"
+    shift
+    local msg="$*"
+    printf '%s [%s] %s\n' "$(date '+%F %T')" "$level" "$msg" >> "$LOG_FILE"
+}
+
+safe_read_file() {
+    local path="$1"
+    [[ -r "$path" ]] && cat "$path" || echo 0
+}
+
+human_bytes() {
+    local bytes="${1:-0}"
+    awk -v b="$bytes" '
+    function human(x) {
+        split("B KB MB GB TB PB", u, " ")
+        i=1
+        while (x >= 1024 && i < 6) { x/=1024; i++ }
+        printf "%.1f %s", x, u[i]
+    }
+    BEGIN { human(b) }'
+}
+
+progress_bar() {
+    local pct="${1:-0}"
+    local width="${2:-24}"
+    local fill=$(( pct * width / 100 ))
+    local empty=$(( width - fill ))
+    local bar_filled
+    local bar_empty
+    bar_filled=$(printf "%${fill}s" "" | tr ' ' '#')
+    bar_empty=$(printf "%${empty}s" "" | tr ' ' '-')
+
+    local color="$GREEN"
+    if (( pct >= 85 )); then
+        color="$RED"
+    elif (( pct >= 65 )); then
+        color="$YELLOW"
+    fi
+
+    printf "%b[%s%s]%b %3d%%" "$color" "$bar_filled" "$bar_empty" "$RESET" "$pct"
+}
+
+sparkline() {
+    local values=("$@")
+    local chars=("▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+    local out=""
+    local v idx
+    for v in "${values[@]}"; do
+        (( v < 0 )) && v=0
+        (( v > 100 )) && v=100
+        idx=$(( v * 7 / 100 ))
+        out+="${chars[$idx]}"
+    done
+    printf "%s" "$out"
+}
+
+trim_history() {
+    local -n arr_ref=$1
+    while ((${#arr_ref[@]} > HISTORY_SIZE)); do
+        arr_ref=("${arr_ref[@]:1}")
+    done
+}
+
+avg_history() {
+    local -n arr_ref=$1
+    local sum=0
+    local count="${#arr_ref[@]}"
+    local v
+    (( count == 0 )) && { echo 0; return; }
+    for v in "${arr_ref[@]}"; do
+        sum=$((sum + v))
+    done
+    echo $((sum / count))
+}
+
+get_cpu_usage() {
+    local cpu user nice system idle iowait irq softirq steal guest guest_nice
+    local total1 idle1 total2 idle2 total_diff idle_diff
+
+    read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+    total1=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    idle1=$((idle + iowait))
+
+    sleep 0.25
+
+    read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+    total2=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    idle2=$((idle + iowait))
+
+    total_diff=$((total2 - total1))
+    idle_diff=$((idle2 - idle1))
+
+    if (( total_diff <= 0 )); then
+        echo 0
+    else
+        echo $((100 * (total_diff - idle_diff) / total_diff))
+    fi
+}
+
+get_mem_stats() {
+    awk '
+    /MemTotal:/ {t=$2}
+    /MemAvailable:/ {a=$2}
+    END {
+        u=t-a
+        p=(u*100)/t
+        printf "%d %.1f %.1f", p, u/1024, t/1024
+    }' /proc/meminfo
+}
+
+get_swap_stats() {
+    awk '
+    /SwapTotal:/ {t=$2}
+    /SwapFree:/ {f=$2}
+    END {
+        u=t-f
+        if (t == 0) {
+            printf "0 0.0 0.0"
+        } else {
+            p=(u*100)/t
+            printf "%d %.1f %.1f", p, u/1024, t/1024
+        }
+    }' /proc/meminfo
+}
+
+get_disk_root() {
+    df -h / | awk 'NR==2 {print $3, $2, $5}'
+}
+
+get_loadavg() {
+    awk '{print $1", "$2", "$3}' /proc/loadavg
+}
+
+get_net_bytes() {
+    local rx tx
+    rx=$(safe_read_file "/sys/class/net/${IFACE}/statistics/rx_bytes")
+    tx=$(safe_read_file "/sys/class/net/${IFACE}/statistics/tx_bytes")
+    echo "$rx $tx"
+}
+
+get_top_processes() {
+    ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 6
+}
+
+get_top_mem_processes() {
+    ps -eo pid,comm,%cpu,%mem --sort=-%mem | head -n 6
+}
+
+docker_available() {
+    command -v docker >/dev/null 2>&1
+}
+
+get_docker_summary() {
+    if ! docker_available; then
+        echo "docker-not-installed"
+        return
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "docker-unavailable"
+        return
+    fi
+
+    local running total
+    running=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
+    total=$(docker ps -aq 2>/dev/null | wc -l | tr -d ' ')
+    echo "ok $running $total"
+}
+
+get_docker_stats() {
+    if ! docker_available || ! docker info >/dev/null 2>&1; then
+        return
+    fi
+
+    docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}' 2>/dev/null | head -n 6
+}
+
+alert_once_file="${STATE_DIR}/last_alert"
+
+send_alert() {
+    local kind="$1"
+    local text="$2"
+    local now
+    now=$(date +%s)
+
+    local last=0
+    [[ -f "$alert_once_file" ]] && last=$(awk -v k="$kind" '$1==k{print $2}' "$alert_once_file" 2>/dev/null | tail -n1)
+    [[ -z "$last" ]] && last=0
+
+    if (( now - last >= 60 )); then
+        log_msg "ALERT" "$text"
+        if (( QUIET == 0 )); then
+            echo -e "${RED}${BOLD}ALERT:${RESET} $text"
+        fi
+        grep -v "^${kind} " "$alert_once_file" 2>/dev/null > "${alert_once_file}.tmp" || true
+        printf "%s %s\n" "$kind" "$now" >> "${alert_once_file}.tmp"
+        mv "${alert_once_file}.tmp" "$alert_once_file"
+    fi
+}
+
+prev_net=($(get_net_bytes))
+prev_rx="${prev_net[0]}"
+prev_tx="${prev_net[1]}"
+prev_time=$(date +%s)
+
+log_msg "INFO" "${APP_NAME} started on iface=${IFACE} mode=${MODE} interval=${INTERVAL}"
+
+trap 'log_msg "INFO" "'"${APP_NAME}"' stopped"; exit 0' INT TERM
+
+while true; do
+    now_epoch=$(date +%s)
+
+    cpu_pct=$(get_cpu_usage)
+
+    read -r mem_pct mem_used_mb mem_total_mb <<< "$(get_mem_stats)"
+    read -r swap_pct swap_used_mb swap_total_mb <<< "$(get_swap_stats)"
+    read -r disk_used disk_total disk_pct <<< "$(get_disk_root)"
+
+    uptime_str=$(uptime -p 2>/dev/null || uptime)
+    host_name=$(hostname)
+    load_avg=$(get_loadavg)
+
+    curr_net=($(get_net_bytes))
+    curr_rx="${curr_net[0]}"
+    curr_tx="${curr_net[1]}"
+
+    dt=$((now_epoch - prev_time))
+    (( dt <= 0 )) && dt=1
+
+    rx_rate=$(( (curr_rx - prev_rx) / dt ))
+    tx_rate=$(( (curr_tx - prev_tx) / dt ))
+    (( rx_rate < 0 )) && rx_rate=0
+    (( tx_rate < 0 )) && tx_rate=0
+    total_net_rate=$((rx_rate + tx_rate))
+
+    prev_rx="$curr_rx"
+    prev_tx="$curr_tx"
+    prev_time="$now_epoch"
+
+    net_rate_kb=$(( total_net_rate / 1024 ))
+    net_display_rx="$(human_bytes "$rx_rate")/s"
+    net_display_tx="$(human_bytes "$tx_rate")/s"
+
+    CPU_HISTORY+=("$cpu_pct")
+    RAM_HISTORY+=("$mem_pct")
+    NET_HISTORY+=("$(( net_rate_kb > 100 ? 100 : net_rate_kb ))")
+
+    trim_history CPU_HISTORY
+    trim_history RAM_HISTORY
+    trim_history NET_HISTORY
+
+    avg_net=$(avg_history NET_HISTORY)
+    spike="no"
+    if (( avg_net > 0 )) && (( net_rate_kb > avg_net * NET_SPIKE_MULTIPLIER )); then
+        spike="yes"
+    fi
+
+    funny_status="all quiet in the silicon swamp"
+    if (( mem_pct >= RAM_ALERT_THRESHOLD )); then
+        funny_status="RAM goblin is eating the furniture"
+        send_alert "ram" "RAM usage is ${mem_pct}% on ${host_name}. The goblin is no longer asking politely."
+    elif (( cpu_pct >= CPU_ALERT_THRESHOLD )); then
+        funny_status="CPU is fighting for its life"
+        send_alert "cpu" "CPU usage is ${cpu_pct}% on ${host_name}. Someone woke the gremlins."
+    elif [[ "$spike" == "yes" ]]; then
+        funny_status="network just sneezed violently"
+        send_alert "net" "Network spike detected on ${host_name}: RX ${net_display_rx}, TX ${net_display_tx}."
+    fi
+
+    log_msg "INFO" "cpu=${cpu_pct}% ram=${mem_pct}% disk=${disk_pct} net_rx=${rx_rate}Bps net_tx=${tx_rate}Bps spike=${spike}"
+
+    if (( NO_CLEAR == 0 )); then
+        clear
+    fi
+
+    echo -e "${CYAN}${BOLD}============================================================${RESET}"
+    echo -e "${CYAN}${BOLD}  VPS SNITCH 👀  ${DIM}${VERSION}${RESET}"
+    echo -e "${CYAN}${BOLD}============================================================${RESET}"
+    echo -e "${DIM}$(rand_line)${RESET}"
+    echo
+    echo "Host         : ${host_name}"
+    echo "Time         : $(date)"
+    echo "Uptime       : ${uptime_str}"
+    echo "Load Avg     : ${load_avg}"
+    echo "Mood         : ${funny_status}"
+    echo "Interface    : ${IFACE}"
+    echo
+
+    printf "CPU          : "
+    progress_bar "$cpu_pct" 28
+    echo
+    printf "RAM          : "
+    progress_bar "$mem_pct" 28
+    printf "  %.0f/%.0f MB\n" "$mem_used_mb" "$mem_total_mb"
+
+    if (( swap_total_mb > 0 )); then
+        printf "Swap         : "
+        progress_bar "$swap_pct" 28
+        printf "  %.0f/%.0f MB\n" "$swap_used_mb" "$swap_total_mb"
+    else
+        echo "Swap         : none (living dangerously)"
+    fi
+
+    echo "Disk /       : ${disk_used}/${disk_total} (${disk_pct})"
+    echo "Download     : ${net_display_rx}"
+    echo "Upload       : ${net_display_tx}"
+
+    if [[ "$spike" == "yes" ]]; then
+        echo -e "Spike        : ${RED}${BOLD}YES${RESET}  something is doing zoomies"
+    else
+        echo -e "Spike        : ${GREEN}no${RESET}"
+    fi
+
+    echo
+    echo "CPU Graph    : $(sparkline "${CPU_HISTORY[@]}")"
+    echo "RAM Graph    : $(sparkline "${RAM_HISTORY[@]}")"
+    echo "NET Graph    : $(sparkline "${NET_HISTORY[@]}")"
+    echo
+
+    echo "Top CPU offenders"
+    get_top_processes
+    echo
+
+    echo "Top RAM offenders"
+    get_top_mem_processes
+    echo
+
+    echo "Docker status"
+    read -r docker_state docker_running docker_total <<< "$(get_docker_summary)"
+    case "$docker_state" in
+        ok)
+            echo "Containers   : ${docker_running} running / ${docker_total} total"
+            get_docker_stats
+            ;;
+        docker-not-installed)
+            echo "Containers   : docker not installed, so the containers are imaginary"
+            ;;
+        docker-unavailable)
+            echo "Containers   : docker installed but unavailable to this user"
+            ;;
+        *)
+            echo "Containers   : unknown docker state"
+            ;;
+    esac
+
+    echo
+    echo "Log File     : ${LOG_FILE}"
+    echo -e "${DIM}CTRL+C to stop the snitching${RESET}"
+
+    sleep "$INTERVAL"
+done

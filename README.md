@@ -10,7 +10,7 @@ Runs in your terminal, logs to a file, and alerts you when things get spicy. Dae
 
 ## installation (don't screw this up)
 
-1. Clone this repo: `git clone https://github.com/yourusername/vpssnitch.git`
+1. Clone this repo: `git clone https://github.com/kisalnelaka/vpssnitch.git`
 2. Make it executable: `chmod +x vpssnitch`
 3. Run it: `./vpssnitch`
 

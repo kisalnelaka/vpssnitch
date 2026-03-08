@@ -3,7 +3,7 @@
 set -u
 
 APP_NAME="vpssnitch"
-VERSION="2.0.0-chaos-gremlin"
+VERSION="2.1.0-chaos-gremlin"
 
 INTERVAL=2
 HISTORY_SIZE=30
@@ -15,6 +15,7 @@ STATE_DIR="${HOME}/.local/share/vpssnitch"
 MODE="interactive"
 NO_CLEAR=0
 QUIET=0
+STYLE="default"
 
 mkdir -p "$STATE_DIR"
 
@@ -51,6 +52,7 @@ Options:
   --interval N          Refresh interval in seconds (default: ${INTERVAL})
   --log-file PATH       Log file path
   --quiet               Reduce jokes and alert spam
+  --style STYLE         Display style: default, minimal, grid (default: default)
   --help                Show this help
 
 Examples:
@@ -83,6 +85,10 @@ while [[ $# -gt 0 ]]; do
         --quiet)
             QUIET=1
             shift
+            ;;
+        --style)
+            STYLE="${2:-default}"
+            shift 2
             ;;
         --help)
             print_help
@@ -398,74 +404,146 @@ while true; do
     echo -e "${CYAN}${BOLD}============================================================${RESET}"
     echo -e "${DIM}$(rand_line)${RESET}"
     echo
-    echo "Host         : ${host_name}"
-    echo "Time         : $(date)"
-    echo "Uptime       : ${uptime_str}"
-    echo "Load Avg     : ${load_avg}"
-    echo "Mood         : ${funny_status}"
-    echo "Interface    : ${IFACE}"
-    echo
 
-    printf "CPU          : "
-    progress_bar "$cpu_pct" 28
-    echo
-    printf "RAM          : "
-    progress_bar "$mem_pct" 28
-    printf "  %.0f/%.0f MB\n" "$mem_used_mb" "$mem_total_mb"
+    if [[ "$STYLE" == "minimal" ]]; then
+        echo "Host: ${host_name} | Time: $(date) | Uptime: ${uptime_str}"
+        echo "Load: ${load_avg} | Mood: ${funny_status} | Interface: ${IFACE}"
+        echo
+        printf "CPU: "
+        progress_bar "$cpu_pct" 20
+        printf " | RAM: "
+        progress_bar "$mem_pct" 20
+        printf " %.0f/%.0f MB" "$mem_used_mb" "$mem_total_mb"
+        if (( swap_total_mb > 0 )); then
+            printf " | Swap: "
+            progress_bar "$swap_pct" 20
+            printf " %.0f/%.0f MB" "$swap_used_mb" "$swap_total_mb"
+        fi
+        echo
+        echo "Disk: ${disk_used}/${disk_total} (${disk_pct}) | RX: ${net_display_rx} | TX: ${net_display_tx}"
+        if [[ "$spike" == "yes" ]]; then
+            echo -e "Spike: ${RED}${BOLD}YES${RESET}  something is doing zoomies\e[K"
+        else
+            echo -e "Spike: ${GREEN}no${RESET}\e[K"
+        fi
+        echo
+        echo "Log: ${LOG_FILE}"
+        echo -e "${DIM}CTRL+C to stop${RESET}"
 
-    if (( swap_total_mb > 0 )); then
-        printf "Swap         : "
-        progress_bar "$swap_pct" 28
-        printf "  %.0f/%.0f MB\n" "$swap_used_mb" "$swap_total_mb"
+    elif [[ "$STYLE" == "grid" ]]; then
+        # Grid style: compact table
+        printf "%-15s %-20s %-15s\n" "Metric" "Value" "Graph/Extra"
+        printf "%-15s %-20s " "Host" "${host_name}" ""
+        echo
+        printf "%-15s %-20s " "Time" "$(date)" ""
+        echo
+        printf "%-15s %-20s " "Uptime" "${uptime_str}" ""
+        echo
+        printf "%-15s %-20s " "Load Avg" "${load_avg}" ""
+        echo
+        printf "%-15s %-20s " "Mood" "${funny_status}" ""
+        echo
+        printf "%-15s %-20s " "Interface" "${IFACE}" ""
+        echo
+        printf "%-15s %-20s " "CPU" "${cpu_pct}%" ""
+        progress_bar "$cpu_pct" 15
+        echo
+        printf "%-15s %-20s " "RAM" "${mem_pct}% ${mem_used_mb}/${mem_total_mb} MB" ""
+        progress_bar "$mem_pct" 15
+        echo
+        if (( swap_total_mb > 0 )); then
+            printf "%-15s %-20s " "Swap" "${swap_pct}% ${swap_used_mb}/${swap_total_mb} MB" ""
+            progress_bar "$swap_pct" 15
+            echo
+        fi
+        printf "%-15s %-20s " "Disk" "${disk_used}/${disk_total} (${disk_pct})" ""
+        echo
+        printf "%-15s %-20s " "Download" "${net_display_rx}" ""
+        echo
+        printf "%-15s %-20s " "Upload" "${net_display_tx}" ""
+        echo
+        if [[ "$spike" == "yes" ]]; then
+            printf "%-15s %-20s " "Spike" "YES something is doing zoomies" ""
+        else
+            printf "%-15s %-20s " "Spike" "no" ""
+        fi
+        echo
+        printf "%-15s %-20s " "Log File" "${LOG_FILE}" ""
+        echo
+        printf "%-15s %-20s " "" "${DIM}CTRL+C to stop${RESET}" ""
+        echo
+
     else
-        echo "Swap         : none (living dangerously)"
+        # Default style
+        echo "Host         : ${host_name}"
+        echo "Time         : $(date)"
+        echo "Uptime       : ${uptime_str}"
+        echo "Load Avg     : ${load_avg}"
+        echo "Mood         : ${funny_status}"
+        echo "Interface    : ${IFACE}"
+        echo
+
+        printf "CPU          : "
+        progress_bar "$cpu_pct" 28
+        echo
+        printf "RAM          : "
+        progress_bar "$mem_pct" 28
+        printf "  %.0f/%.0f MB\n" "$mem_used_mb" "$mem_total_mb"
+
+        if (( swap_total_mb > 0 )); then
+            printf "Swap         : "
+            progress_bar "$swap_pct" 28
+            printf "  %.0f/%.0f MB\n" "$swap_used_mb" "$swap_total_mb"
+        else
+            echo "Swap         : none (living dangerously)"
+        fi
+
+        echo "Disk /       : ${disk_used}/${disk_total} (${disk_pct})"
+        echo "Download     : ${net_display_rx}"
+        echo "Upload       : ${net_display_tx}"
+
+        if [[ "$spike" == "yes" ]]; then
+            echo -e "Spike        : ${RED}${BOLD}YES${RESET}  something is doing zoomies\e[K"
+        else
+            echo -e "Spike        : ${GREEN}no${RESET}\e[K"
+        fi
+
+        echo
+        echo "CPU Graph    : $(sparkline "${CPU_HISTORY[@]}")"
+        echo "RAM Graph    : $(sparkline "${RAM_HISTORY[@]}")"
+        echo "NET Graph    : $(sparkline "${NET_HISTORY[@]}")"
+        echo
+
+        echo "Top CPU offenders"
+        get_top_processes
+        echo
+
+        echo "Top RAM offenders"
+        get_top_mem_processes
+        echo
+
+        echo "Docker status"
+        read -r docker_state docker_running docker_total <<< "$(get_docker_summary)"
+        case "$docker_state" in
+            ok)
+                echo -e "Containers   : ${docker_running} running / ${docker_total} total\e[K"
+                get_docker_stats
+                ;;
+            docker-not-installed)
+                echo -e "Containers   : docker not installed, so the containers are imaginary\e[K"
+                ;;
+            docker-unavailable)
+                echo -e "Containers   : docker installed but unavailable to this user\e[K"
+                ;;
+            *)
+                echo -e "Containers   : unknown docker state\e[K"
+                ;;
+        esac
+
+        echo
+        echo "Log File     : ${LOG_FILE}"
+        echo -e "${DIM}CTRL+C to stop the snitching${RESET}"
     fi
-
-    echo "Disk /       : ${disk_used}/${disk_total} (${disk_pct})"
-    echo "Download     : ${net_display_rx}"
-    echo "Upload       : ${net_display_tx}"
-
-    if [[ "$spike" == "yes" ]]; then
-        echo -e "Spike        : ${RED}${BOLD}YES${RESET}  something is doing zoomies\e[K"
-    else
-        echo -e "Spike        : ${GREEN}no${RESET}\e[K"
-    fi
-
-    echo
-    echo "CPU Graph    : $(sparkline "${CPU_HISTORY[@]}")"
-    echo "RAM Graph    : $(sparkline "${RAM_HISTORY[@]}")"
-    echo "NET Graph    : $(sparkline "${NET_HISTORY[@]}")"
-    echo
-
-    echo "Top CPU offenders"
-    get_top_processes
-    echo
-
-    echo "Top RAM offenders"
-    get_top_mem_processes
-    echo
-
-    echo "Docker status"
-    read -r docker_state docker_running docker_total <<< "$(get_docker_summary)"
-    case "$docker_state" in
-        ok)
-            echo -e "Containers   : ${docker_running} running / ${docker_total} total\e[K"
-            get_docker_stats
-            ;;
-        docker-not-installed)
-            echo -e "Containers   : docker not installed, so the containers are imaginary\e[K"
-            ;;
-        docker-unavailable)
-            echo -e "Containers   : docker installed but unavailable to this user\e[K"
-            ;;
-        *)
-            echo -e "Containers   : unknown docker state\e[K"
-            ;;
-    esac
-
-    echo
-    echo "Log File     : ${LOG_FILE}"
-    echo -e "${DIM}CTRL+C to stop the snitching${RESET}"
 
     sleep "$INTERVAL"
 done

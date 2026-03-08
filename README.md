@@ -29,6 +29,7 @@ That's it. No dependencies beyond basic Linux utils. If you're on Windows, go cr
 - `--interval N`: Refresh every N seconds (default 2, because I'm impatient)
 - `--log-file PATH`: Where to dump the logs (default ~/.local/share/vpssnitch/vpssnitch.log)
 - `--quiet`: Less jokes, less alerts (for the boring people)
+- `--style STYLE`: Display style - default (full), minimal (compact), grid (tabular)
 - `--help`: This, but you already know
 
 ### examples
@@ -41,6 +42,16 @@ Watch your main interface:
 Specify interface:
 ```
 ./vpssnitch eth0
+```
+
+Minimal style for quick glances:
+```
+./vpssnitch --style minimal
+```
+
+Grid style for tabular view:
+```
+./vpssnitch --style grid
 ```
 
 Daemon mode with custom interval:

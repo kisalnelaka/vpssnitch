@@ -390,7 +390,7 @@ while true; do
     log_msg "INFO" "cpu=${cpu_pct}% ram=${mem_pct}% disk=${disk_pct} net_rx=${rx_rate}Bps net_tx=${tx_rate}Bps spike=${spike}"
 
     if (( NO_CLEAR == 0 )); then
-        clear
+        printf '\e[H'
     fi
 
     echo -e "${CYAN}${BOLD}============================================================${RESET}"

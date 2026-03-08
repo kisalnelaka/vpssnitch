@@ -292,7 +292,7 @@ get_docker_stats() {
         return
     fi
 
-    docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}' 2>/dev/null | head -n 6
+    docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}' 2>/dev/null | head -n 6 | sed 's/$/\x1b[K/'
 }
 
 alert_once_file="${STATE_DIR}/last_alert"
@@ -390,7 +390,7 @@ while true; do
     log_msg "INFO" "cpu=${cpu_pct}% ram=${mem_pct}% disk=${disk_pct} net_rx=${rx_rate}Bps net_tx=${tx_rate}Bps spike=${spike}"
 
     if (( NO_CLEAR == 0 )); then
-        printf '\e[H\e[J'
+        printf '\e[H'
     fi
 
     echo -e "${CYAN}${BOLD}============================================================${RESET}"
@@ -449,17 +449,17 @@ while true; do
     read -r docker_state docker_running docker_total <<< "$(get_docker_summary)"
     case "$docker_state" in
         ok)
-            echo "Containers   : ${docker_running} running / ${docker_total} total"
+            echo -e "Containers   : ${docker_running} running / ${docker_total} total\e[K"
             get_docker_stats
             ;;
         docker-not-installed)
-            echo "Containers   : docker not installed, so the containers are imaginary"
+            echo -e "Containers   : docker not installed, so the containers are imaginary\e[K"
             ;;
         docker-unavailable)
-            echo "Containers   : docker installed but unavailable to this user"
+            echo -e "Containers   : docker installed but unavailable to this user\e[K"
             ;;
         *)
-            echo "Containers   : unknown docker state"
+            echo -e "Containers   : unknown docker state\e[K"
             ;;
     esac
 

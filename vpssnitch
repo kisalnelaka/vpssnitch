@@ -119,8 +119,24 @@ rand_line() {
         "the gremlins are unionizing"
         "all metrics are innocent until graphed"
         "server vibes: unstable but brave"
+        "CPU is plotting world domination"
+        "RAM: because forgetting is not an option"
+        "disk space: the final frontier"
+        "network: faster than your ex's excuses"
+        "uptime: longer than your attention span"
+        "load average: because averages lie"
+        "swap: the emergency parachute"
+        "processes: multiplying like rabbits"
+        "Docker: containerizing your chaos"
+        "alerts: because silence is suspicious"
+        "snitch mode: activated"
     )
     echo "${arr[$((RANDOM % ${#arr[@]}))]}"
+}
+
+rand_emoji() {
+    local emojis=("👀" "🔥" "💥" "⚡" "🚀" "🛸" "🤖" "👾" "💀" "🎉" "😈" "🦄" "🌪️" "💣" "🔪" "🕵️" "🔔" "📡" "🖥️" "💻")
+    echo "${emojis[$((RANDOM % ${#emojis[@]}))]}"
 }
 
 log_msg() {
@@ -414,11 +430,11 @@ while true; do
     log_msg "INFO" "cpu=${cpu_pct}% ram=${mem_pct}% disk=${disk_pct} net_rx=${rx_rate}Bps net_tx=${tx_rate}Bps spike=${spike}"
 
     if (( NO_CLEAR == 0 )); then
-        printf '\e[H'
+        printf '\e[2J\e[H'
     fi
 
     echo -e "${CYAN}${BOLD}============================================================${RESET}"
-    echo -e "${CYAN}${BOLD}  VPS SNITCH 👀  ${DIM}${VERSION}${RESET}"
+    echo -e "${CYAN}${BOLD}  VPS SNITCH $(rand_emoji)  ${DIM}${VERSION}${RESET}"
     echo -e "${CYAN}${BOLD}============================================================${RESET}"
     echo -e "${DIM}$(rand_line)${RESET} | Issues: ${ALERT_COUNT}"
     echo
@@ -497,7 +513,7 @@ while true; do
         echo "Time         : $(date)"
         echo "Uptime       : ${uptime_str}"
         echo "Load Avg     : ${load_avg}"
-        echo "Mood         : $(truncate "$funny_status" 50)"
+        echo "Mood         : $(truncate "$funny_status" 50) $(rand_emoji)"
         echo "Interface    : ${IFACE}"
         echo
 
@@ -530,9 +546,9 @@ while true; do
         fi
 
         echo
-        echo "CPU Graph    : $(sparkline "${CPU_HISTORY[@]}")"
-        echo "RAM Graph    : $(sparkline "${RAM_HISTORY[@]}")"
-        echo "NET Graph    : $(sparkline "${NET_HISTORY[@]}")"
+        echo "CPU Graph    : $(sparkline "${CPU_HISTORY[@]}") $(rand_emoji)"
+        echo "RAM Graph    : $(sparkline "${RAM_HISTORY[@]}") $(rand_emoji)"
+        echo "NET Graph    : $(sparkline "${NET_HISTORY[@]}") $(rand_emoji)"
         echo
 
         echo "Top CPU offenders"
